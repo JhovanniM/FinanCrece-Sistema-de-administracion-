@@ -1,1 +1,499 @@
+import sqlite3
+from datetime import datetime, timedelta
+
+DB_NAME = "prestamos.db"
+
+def conectar():
+    return sqlite3.connect(DB_NAME)
+
+def inicializar_bd():
+    conexion = conectar()
+    cursor = conexion.cursor()
+
+    # Tabla clientes
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS clientes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nombre TEXT NOT NULL,
+            telefono TEXT,
+            correo TEXT,
+            direccion TEXT,
+            lugar_residencia TEXT,
+            dia_cobro TEXT,
+            frecuencia_pago TEXT
+        )
+    ''')
+
+    # Tabla prestamos
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS prestamos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cliente_id INTEGER,
+            monto REAL,
+            tasa_interes REAL,
+            plazo_periodos INTEGER,
+            pago_por_periodo REAL,
+            total_pagar REAL,
+            interes_total REAL,
+            fecha_inicio TEXT,
+            fecha_estimada_fin TEXT,
+            estado TEXT,
+            FOREIGN KEY(cliente_id) REFERENCES clientes(id)
+        )
+    ''')
+
+    # Tabla pagos
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS pagos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            prestamo_id INTEGER,
+            numero_periodo INTEGER,
+            fecha_esperada TEXT,
+            fecha_pago TEXT,
+            monto_esperado REAL,
+            monto_pagado REAL,
+            estatus TEXT,
+            adeudo_acumulado REAL,
+            FOREIGN KEY(prestamo_id) REFERENCES prestamos(id)
+        )
+    ''')
+
+    # Tabla capital
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS capital (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            capital_total REAL,
+            capital_disponible REAL,
+            deuda_dueno REAL,
+            fecha_actualizacion TEXT
+        )
+    ''')
+    
+    # Inicializar capital si no existe
+    cursor.execute("SELECT COUNT(*) FROM capital")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute("INSERT INTO capital (capital_total, capital_disponible, deuda_dueno, fecha_actualizacion) VALUES (0, 0, 0, ?)", (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),))
+
+    # Tabla movimientos_capital
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS movimientos_capital (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tipo TEXT,
+            monto REAL,
+            descripcion TEXT,
+            fecha TEXT
+        )
+    ''')
+
+    # Tabla historial_cerrados
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS historial_cerrados (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cliente_id INTEGER,
+            nombre_cliente TEXT,
+            monto_prestado REAL,
+            total_cobrado REAL,
+            ganancia_generada REAL,
+            fecha_inicio TEXT,
+            fecha_cierre TEXT,
+            motivo_cierre TEXT
+        )
+    ''')
+
+    conexion.commit()
+    conexion.close()
+
+# --- GESTION DE CLIENTES ---
+def registrar_cliente(nombre, telefono, correo, direccion, lugar_residencia, dia_cobro, frecuencia_pago):
+    conexion = conectar()
+    cursor = conexion.cursor()
+    cursor.execute('''
+        INSERT INTO clientes (nombre, telefono, correo, direccion, lugar_residencia, dia_cobro, frecuencia_pago)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    ''', (nombre, telefono, correo, direccion, lugar_residencia, dia_cobro, frecuencia_pago))
+    conexion.commit()
+    conexion.close()
+
+def obtener_clientes(busqueda=""):
+    conexion = conectar()
+    cursor = conexion.cursor()
+    if busqueda:
+        busqueda_like = f"%{busqueda}%"
+        cursor.execute('''
+            SELECT * FROM clientes WHERE nombre LIKE ? OR telefono LIKE ? OR lugar_residencia LIKE ?
+        ''', (busqueda_like, busqueda_like, busqueda_like))
+    else:
+        cursor.execute('SELECT * FROM clientes')
+    clientes = cursor.fetchall()
+    conexion.close()
+    return clientes
+
+def actualizar_cliente(id_cliente, nombre, telefono, correo, direccion, lugar_residencia, dia_cobro, frecuencia_pago):
+    conexion = conectar()
+    cursor = conexion.cursor()
+    cursor.execute('''
+        UPDATE clientes SET nombre=?, telefono=?, correo=?, direccion=?, lugar_residencia=?, dia_cobro=?, frecuencia_pago=?
+        WHERE id=?
+    ''', (nombre, telefono, correo, direccion, lugar_residencia, dia_cobro, frecuencia_pago, id_cliente))
+    conexion.commit()
+    conexion.close()
+
+def eliminar_cliente(id_cliente):
+    conexion = conectar()
+    cursor = conexion.cursor()
+    cursor.execute('DELETE FROM clientes WHERE id=?', (id_cliente,))
+    conexion.commit()
+    conexion.close()
+
+def obtener_cliente_por_id(id_cliente):
+    conexion = conectar()
+    cursor = conexion.cursor()
+    cursor.execute('SELECT * FROM clientes WHERE id=?', (id_cliente,))
+    cliente = cursor.fetchone()
+    conexion.close()
+    return cliente
+
+# --- GESTION DE CAPITAL ---
+def obtener_capital():
+    conexion = conectar()
+    cursor = conexion.cursor()
+    cursor.execute('SELECT * FROM capital WHERE id=1')
+    cap = cursor.fetchone()
+    conexion.close()
+    return cap
+
+def registrar_movimiento_capital(tipo, monto, descripcion):
+    conexion = conectar()
+    cursor = conexion.cursor()
+    fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cursor.execute('''
+        INSERT INTO movimientos_capital (tipo, monto, descripcion, fecha) VALUES (?, ?, ?, ?)
+    ''', (tipo, monto, descripcion, fecha))
+    
+    # Actualizar tabla capital
+    cursor.execute('SELECT capital_total, capital_disponible, deuda_dueno FROM capital WHERE id=1')
+    cap = cursor.fetchone()
+    total, disponible, deuda = cap[0], cap[1], cap[2]
+    
+    if tipo == 'entrada':
+        if deuda > 0:
+            if monto >= deuda:
+                restante = monto - deuda
+                deuda = 0
+                disponible += restante
+                total += restante
+            else:
+                deuda -= monto
+        else:
+            disponible += monto
+            total += monto
+    elif tipo == 'salida':
+        if disponible >= monto:
+            disponible -= monto
+            total -= monto
+        else:
+            faltante = monto - disponible
+            disponible = 0
+            deuda += faltante
+            total -= monto
+    
+    cursor.execute('''
+        UPDATE capital SET capital_total=?, capital_disponible=?, deuda_dueno=?, fecha_actualizacion=? WHERE id=1
+    ''', (total, disponible, deuda, fecha))
+    
+    conexion.commit()
+    conexion.close()
+
+def ajustar_capital_manual(nuevo_total):
+    conexion = conectar()
+    cursor = conexion.cursor()
+    fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # Obtenemos capital en calle sumando todos los préstamos activos (su monto original, no los intereses)
+    # Una forma más exacta es el capital total anterior - disponible.
+    cursor.execute('SELECT capital_total, capital_disponible, deuda_dueno FROM capital WHERE id=1')
+    cap = cursor.fetchone()
+    total_ant, disponible_ant, deuda_ant = cap[0], cap[1], cap[2]
+    
+    capital_en_calle = total_ant - disponible_ant + deuda_ant
+    
+    nuevo_disponible = nuevo_total - capital_en_calle
+    nueva_deuda = 0
+    if nuevo_disponible < 0:
+        nueva_deuda = abs(nuevo_disponible)
+        nuevo_disponible = 0
+        
+    cursor.execute('''
+        UPDATE capital SET capital_total=?, capital_disponible=?, deuda_dueno=?, fecha_actualizacion=? WHERE id=1
+    ''', (nuevo_total, nuevo_disponible, nueva_deuda, fecha))
+    
+    cursor.execute('''
+        INSERT INTO movimientos_capital (tipo, monto, descripcion, fecha) VALUES (?, ?, ?, ?)
+    ''', ('ajuste', nuevo_total, 'Ajuste manual de capital total', fecha))
+    
+    conexion.commit()
+    conexion.close()
+
+# --- GESTION DE PRESTAMOS ---
+def registrar_prestamo(cliente_id, monto, tasa_interes, plazo_periodos):
+    cliente = obtener_cliente_por_id(cliente_id)
+    frecuencia = cliente[7] # frecuencia_pago
+    
+    interes_total = monto * (tasa_interes / 100)
+    total_pagar = monto + interes_total
+    pago_por_periodo = total_pagar / plazo_periodos
+    fecha_inicio = datetime.now()
+    
+    if frecuencia == 'Semanal':
+        dias = plazo_periodos * 7
+    else: # Mensual
+        dias = plazo_periodos * 30
+        
+    fecha_estimada_fin = fecha_inicio + timedelta(days=dias)
+    
+    conexion = conectar()
+    cursor = conexion.cursor()
+    
+    # Validar capital y registrar movimiento
+    # Lo restamos usando registrar_movimiento_capital pero aquí hacemos la inserción directa para una sola transacción
+    cursor.execute('SELECT capital_disponible, deuda_dueno FROM capital WHERE id=1')
+    cap = cursor.fetchone()
+    disponible, deuda = cap[0], cap[1]
+    
+    if disponible >= monto:
+        disponible -= monto
+    else:
+        faltante = monto - disponible
+        disponible = 0
+        deuda += faltante
+        cursor.execute("INSERT INTO movimientos_capital (tipo, monto, descripcion, fecha) VALUES (?, ?, ?, ?)", 
+                       ("deuda_dueño", faltante, f"Préstamo a {cliente[1]} excede capital", fecha_inicio.strftime("%Y-%m-%d %H:%M:%S")))
+        
+    cursor.execute('UPDATE capital SET capital_disponible=?, deuda_dueno=?, fecha_actualizacion=? WHERE id=1', 
+                   (disponible, deuda, fecha_inicio.strftime("%Y-%m-%d %H:%M:%S")))
+    
+    cursor.execute("INSERT INTO movimientos_capital (tipo, monto, descripcion, fecha) VALUES (?, ?, ?, ?)", 
+                   ("salida", monto, f"Préstamo autorizado a {cliente[1]}", fecha_inicio.strftime("%Y-%m-%d %H:%M:%S")))
+    
+    cursor.execute('''
+        INSERT INTO prestamos (cliente_id, monto, tasa_interes, plazo_periodos, pago_por_periodo, total_pagar, interes_total, fecha_inicio, fecha_estimada_fin, estado)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (cliente_id, monto, tasa_interes, plazo_periodos, pago_por_periodo, total_pagar, interes_total, fecha_inicio.strftime("%Y-%m-%d"), fecha_estimada_fin.strftime("%Y-%m-%d"), 'activo'))
+    
+    prestamo_id = cursor.lastrowid
+    
+    # Generar pagos esperados
+    fecha_esperada = fecha_inicio
+    for i in range(1, plazo_periodos + 1):
+        if frecuencia == 'Semanal':
+            fecha_esperada += timedelta(days=7)
+        else:
+            fecha_esperada += timedelta(days=30)
+            
+        cursor.execute('''
+            INSERT INTO pagos (prestamo_id, numero_periodo, fecha_esperada, fecha_pago, monto_esperado, monto_pagado, estatus, adeudo_acumulado)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (prestamo_id, i, fecha_esperada.strftime("%Y-%m-%d"), None, pago_por_periodo, 0, 'pendiente', 0))
+    
+    conexion.commit()
+    conexion.close()
+
+def obtener_prestamos_activos_cliente(cliente_id):
+    conexion = conectar()
+    cursor = conexion.cursor()
+    cursor.execute('SELECT * FROM prestamos WHERE cliente_id=? AND estado="activo"', (cliente_id,))
+    prestamos = cursor.fetchall()
+    conexion.close()
+    return prestamos
+
+def obtener_todos_prestamos_activos():
+    conexion = conectar()
+    cursor = conexion.cursor()
+    cursor.execute('''
+        SELECT p.id, c.nombre, p.monto, p.total_pagar, p.pago_por_periodo, p.fecha_inicio, p.estado 
+        FROM prestamos p 
+        JOIN clientes c ON p.cliente_id = c.id 
+        WHERE p.estado="activo"
+    ''')
+    prestamos = cursor.fetchall()
+    conexion.close()
+    return prestamos
+
+def obtener_pagos_prestamo(prestamo_id):
+    conexion = conectar()
+    cursor = conexion.cursor()
+    # Actualizar estatus a vencido si la fecha_esperada < hoy y estatus es pendiente
+    hoy = datetime.now().strftime("%Y-%m-%d")
+    cursor.execute("UPDATE pagos SET estatus='vencido' WHERE prestamo_id=? AND estatus='pendiente' AND fecha_esperada < ?", (prestamo_id, hoy))
+    conexion.commit()
+    
+    cursor.execute('SELECT * FROM pagos WHERE prestamo_id=? ORDER BY numero_periodo', (prestamo_id,))
+    pagos = cursor.fetchall()
+    conexion.close()
+    return pagos
+
+def registrar_pago(pago_id, monto_recibido, estatus, adeudo=0):
+    conexion = conectar()
+    cursor = conexion.cursor()
+    fecha_pago = datetime.now().strftime("%Y-%m-%d")
+    
+    cursor.execute('SELECT prestamo_id, monto_esperado FROM pagos WHERE id=?', (pago_id,))
+    res = cursor.fetchone()
+    if not res: return
+    prestamo_id, monto_esperado = res
+    
+    cursor.execute('''
+        UPDATE pagos SET fecha_pago=?, monto_pagado=?, estatus=?, adeudo_acumulado=? WHERE id=?
+    ''', (fecha_pago, monto_recibido, estatus, adeudo, pago_id))
+    
+    # Registrar entrada de capital
+    if monto_recibido > 0:
+        cursor.execute("INSERT INTO movimientos_capital (tipo, monto, descripcion, fecha) VALUES (?, ?, ?, ?)", 
+                       ("entrada", monto_recibido, f"Pago recibido del préstamo #{prestamo_id}", fecha_pago))
+        
+        cursor.execute('SELECT capital_total, capital_disponible, deuda_dueno FROM capital WHERE id=1')
+        cap = cursor.fetchone()
+        total, disponible, deuda = cap[0], cap[1], cap[2]
+        if deuda > 0:
+            if monto_recibido >= deuda:
+                restante = monto_recibido - deuda
+                deuda = 0
+                disponible += restante
+                total += restante # La ganancia/recuperacion aumenta el total
+            else:
+                deuda -= monto_recibido
+        else:
+            disponible += monto_recibido
+            total += monto_recibido # Incrementa capital total por interés
+            
+        cursor.execute('UPDATE capital SET capital_total=?, capital_disponible=?, deuda_dueno=?, fecha_actualizacion=? WHERE id=1', 
+                       (total, disponible, deuda, fecha_pago))
+    
+    # Verificar si el préstamo se ha concluido
+    cursor.execute('SELECT COUNT(*) FROM pagos WHERE prestamo_id=? AND estatus IN ("pendiente", "vencido", "falta")', (prestamo_id,))
+    pendientes = cursor.fetchone()[0]
+    
+    if pendientes == 0:
+        cursor.execute('UPDATE prestamos SET estado="concluido" WHERE id=?', (prestamo_id,))
+        
+    conexion.commit()
+    conexion.close()
+    
+def concluir_prestamo_historial(prestamo_id, motivo):
+    # Guarda en historial_cerrados y borra registros
+    conexion = conectar()
+    cursor = conexion.cursor()
+    
+    cursor.execute('SELECT cliente_id, monto, total_pagar, interes_total, fecha_inicio FROM prestamos WHERE id=?', (prestamo_id,))
+    p_data = cursor.fetchone()
+    if not p_data: return
+    cliente_id, monto, total_pagar, interes_total, fecha_inicio = p_data
+    
+    cursor.execute('SELECT nombre FROM clientes WHERE id=?', (cliente_id,))
+    c_data = cursor.fetchone()
+    nombre_cliente = c_data[0] if c_data else "Desconocido"
+    
+    cursor.execute('SELECT SUM(monto_pagado) FROM pagos WHERE prestamo_id=?', (prestamo_id,))
+    pagos_data = cursor.fetchone()
+    total_cobrado = pagos_data[0] if pagos_data[0] else 0
+    ganancia_generada = total_cobrado - monto
+    fecha_cierre = datetime.now().strftime("%Y-%m-%d")
+    
+    cursor.execute('''
+        INSERT INTO historial_cerrados (cliente_id, nombre_cliente, monto_prestado, total_cobrado, ganancia_generada, fecha_inicio, fecha_cierre, motivo_cierre)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (cliente_id, nombre_cliente, monto, total_cobrado, ganancia_generada, fecha_inicio, fecha_cierre, motivo))
+    
+    # Eliminar registros
+    cursor.execute('DELETE FROM pagos WHERE prestamo_id=?', (prestamo_id,))
+    cursor.execute('DELETE FROM prestamos WHERE id=?', (prestamo_id,))
+    
+    conexion.commit()
+    conexion.close()
+
+# --- COBROS DEL DIA ---
+def obtener_cobros_del_dia(fecha=None):
+    if fecha is None:
+        fecha = datetime.now().strftime("%Y-%m-%d")
+        
+    # Validamos vencidos
+    conexion = conectar()
+    cursor = conexion.cursor()
+    cursor.execute("UPDATE pagos SET estatus='vencido' WHERE estatus='pendiente' AND fecha_esperada < ?", (datetime.now().strftime("%Y-%m-%d"),))
+    conexion.commit()
+    
+    cursor.execute('''
+        SELECT c.nombre, c.telefono, c.lugar_residencia, p.id, pa.id, pa.monto_esperado, pa.estatus, p.cliente_id
+        FROM pagos pa
+        JOIN prestamos p ON pa.prestamo_id = p.id
+        JOIN clientes c ON p.cliente_id = c.id
+        WHERE pa.fecha_esperada = ? OR pa.estatus = 'vencido'
+    ''', (fecha,))
+    
+    cobros = cursor.fetchall()
+    conexion.close()
+    return cobros
+
+# --- METRICAS Y GRAFICAS ---
+def obtener_metricas_dashboard():
+    conexion = conectar()
+    cursor = conexion.cursor()
+    hoy = datetime.now().strftime("%Y-%m-%d")
+    
+    # Cobros esperados hoy
+    cursor.execute("SELECT SUM(monto_esperado) FROM pagos WHERE fecha_esperada = ? AND estatus IN ('pendiente', 'vencido')", (hoy,))
+    res1 = cursor.fetchone()
+    esperado_hoy = res1[0] if res1 and res1[0] else 0
+    
+    # Ganancias estimadas
+    cursor.execute("SELECT SUM(interes_total) FROM prestamos WHERE estado='activo'")
+    res2 = cursor.fetchone()
+    ganancias_estimadas = res2[0] if res2 and res2[0] else 0
+    
+    # Préstamos activos
+    cursor.execute("SELECT COUNT(*) FROM prestamos WHERE estado='activo'")
+    prestamos_activos = cursor.fetchone()[0]
+    
+    # Deuda acumulada de clientes
+    cursor.execute("SELECT SUM(adeudo_acumulado) FROM pagos WHERE estatus IN ('vencido', 'parcial', 'falta')")
+    res3 = cursor.fetchone()
+    deuda_clientes = res3[0] if res3 and res3[0] else 0
+    
+    conexion.close()
+    return {
+        "esperado_hoy": esperado_hoy,
+        "ganancias_estimadas": ganancias_estimadas,
+        "prestamos_activos": prestamos_activos,
+        "deuda_clientes": deuda_clientes
+    }
+
+def obtener_datos_graficas():
+    conexion = conectar()
+    cursor = conexion.cursor()
+    
+    # Capital por zona
+    cursor.execute('''
+        SELECT c.lugar_residencia, SUM(p.monto) 
+        FROM prestamos p 
+        JOIN clientes c ON p.cliente_id = c.id 
+        WHERE p.estado='activo' 
+        GROUP BY c.lugar_residencia
+    ''')
+    capital_por_zona = cursor.fetchall()
+    
+    # Movimientos de capital (entradas vs salidas)
+    cursor.execute('''
+        SELECT tipo, SUM(monto) FROM movimientos_capital GROUP BY tipo
+    ''')
+    movimientos = cursor.fetchall()
+    
+    conexion.close()
+    return {
+        "capital_por_zona": capital_por_zona,
+        "movimientos": movimientos
+    }
+
+if __name__ == "__main__":
+    inicializar_bd()
+    print("Base de datos inicializada correctamente.")
 
