@@ -1,1 +1,41 @@
+import sys
+import subprocess
+
+def check_dependencies():
+    missing = []
+    try:
+        import ttkbootstrap
+    except ImportError:
+        missing.append("ttkbootstrap")
+        
+    try:
+        import matplotlib
+    except ImportError:
+        missing.append("matplotlib")
+        
+    try:
+        import PIL
+    except ImportError:
+        missing.append("pillow")
+        
+    if missing:
+        print(f"Faltan dependencias requeridas: {', '.join(missing)}")
+        print("Intentando instalar automáticamente...")
+        try:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", *missing])
+            print("Dependencias instaladas correctamente.")
+        except Exception as e:
+            print("Error al instalar dependencias. Por favor ejecuta el siguiente comando manualmente:")
+            print(f"pip install {' '.join(missing)}")
+            sys.exit(1)
+
+if __name__ == "__main__":
+    check_dependencies()
+    
+    # Importamos después de verificar dependencias
+    from frontend import PrestamosApp
+    
+    # Iniciar la aplicación
+    app = PrestamosApp()
+    app.mainloop()
 
