@@ -1,1 +1,458 @@
 
+import tkinter as tk
+import ttkbootstrap as ttk
+from ttkbootstrap.constants import *
+from ttkbootstrap.dialogs import Messagebox
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import matplotlib.pyplot as plt
+from datetime import datetime
+import backend
+import os
+from PIL import Image, ImageTk
+
+class PrestamosApp(ttk.Window):
+    def __init__(self):
+        super().__init__(themename="darkly")
+        self.title("Préstamos Personales")
+        self.geometry("1100x700")
+        self.state('zoomed') # Maximizado por defecto
+        
+        # Inicializar BD
+        backend.inicializar_bd()
+        
+        # Contenedores principales
+        self.main_container = ttk.Frame(self)
+        self.main_container.pack(fill=BOTH, expand=YES)
+        
+        self.mostrar_login()
+
+    def limpiar_contenedor(self):
+        for widget in self.main_container.winfo_children():
+            widget.destroy()
+
+    def mostrar_login(self):
+        self.limpiar_contenedor()
+        
+        login_frame = ttk.Frame(self.main_container, padding=50)
+        login_frame.pack(expand=YES)
+        
+        # Espacio para Logo
+        try:
+            ruta_logo = os.path.join(os.path.dirname(__file__), "logo.png")
+            if os.path.exists(ruta_logo):
+                # Usar Pillow para soportar cualquier formato y redimensionar
+                imagen = Image.open(ruta_logo)
+                # Redimensionar a 150x150 manteniendo calidad
+                imagen = imagen.resize((150, 150), Image.Resampling.LANCZOS)
+                self.logo_img = ImageTk.PhotoImage(imagen)
+                ttk.Label(login_frame, image=self.logo_img).pack(pady=10)
+            else:
+                ttk.Label(login_frame, text="[Falta logo.png - Colócalo en la misma carpeta]", font=("Inter", 10, "italic")).pack(pady=10)
+        except Exception as e:
+            ttk.Label(login_frame, text=f"[Error al cargar logo: {str(e)}]", font=("Inter", 10)).pack(pady=10)
+            
+        ttk.Label(login_frame, text="Préstamos Personales a tu medida", font=("Inter", 24, "bold")).pack(pady=20)
+        
+        ttk.Label(login_frame, text="Usuario").pack(anchor=W)
+        self.entry_user = ttk.Entry(login_frame, width=30)
+        self.entry_user.pack(pady=5)
+        self.entry_user.insert(0, "admin")
+        
+        ttk.Label(login_frame, text="Contraseña").pack(anchor=W)
+        self.entry_pass = ttk.Entry(login_frame, show="*", width=30)
+        self.entry_pass.pack(pady=5)
+        self.entry_pass.insert(0, "admin")
+        
+        ttk.Button(login_frame, text="Entrar", bootstyle=SUCCESS, width=30, command=self.verificar_login).pack(pady=20)
+
+    def verificar_login(self):
+        # Login simple por demostración
+        if self.entry_user.get() == "admin" and self.entry_pass.get() == "admin":
+            self.construir_interfaz_principal()
+        else:
+            Messagebox.show_error("Credenciales incorrectas", "Error")
+
+    def construir_interfaz_principal(self):
+        self.limpiar_contenedor()
+        
+        # Sidebar
+        self.sidebar = ttk.Frame(self.main_container, width=250, bootstyle="secondary")
+        self.sidebar.pack(side=LEFT, fill=Y)
+        self.sidebar.pack_propagate(False)
+        
+        ttk.Label(self.sidebar, text="MENÚ PRINCIPAL", font=("Inter", 14, "bold"), bootstyle="inverse-secondary").pack(pady=20)
+        
+        botones = [
+            ("Dashboard", "primary", self.mostrar_dashboard),
+            ("Clientes", "info", self.mostrar_clientes),
+            ("Préstamos", "warning", self.mostrar_prestamos),
+            ("Cobros", "success", self.mostrar_cobros),
+            ("Capital", "danger", self.mostrar_capital),
+            ("Gráficas", "light", self.mostrar_graficas),
+            ("Salir", "secondary", self.mostrar_login)
+        ]
+        
+        for texto, estilo, comando in botones:
+            ttk.Button(self.sidebar, text=texto, bootstyle=f"{estilo}-outline", command=comando).pack(fill=X, padx=10, pady=5)
+            
+        # Contenido
+        self.content_frame = ttk.Frame(self.main_container, padding=20)
+        self.content_frame.pack(side=RIGHT, fill=BOTH, expand=YES)
+        
+        self.mostrar_dashboard()
+
+    def limpiar_contenido(self):
+        for widget in self.content_frame.winfo_children():
+            widget.destroy()
+
+    # --- DASHBOARD ---
+    def mostrar_dashboard(self):
+        self.limpiar_contenido()
+        ttk.Label(self.content_frame, text="Dashboard Principal", font=("Inter", 20, "bold")).pack(anchor=W, pady=10)
+        
+        metricas = backend.obtener_metricas_dashboard()
+        cap = backend.obtener_capital()
+        cap_disponible = cap[2] if cap else 0
+        deuda = cap[3] if cap else 0
+        
+        cards_frame = ttk.Frame(self.content_frame)
+        cards_frame.pack(fill=X, pady=20)
+        
+        self.crear_tarjeta(cards_frame, "Cobros Esperados Hoy", f"${metricas['esperado_hoy']:,.2f}", SUCCESS)
+        self.crear_tarjeta(cards_frame, "Ganancias Estimadas", f"${metricas['ganancias_estimadas']:,.2f}", INFO)
+        self.crear_tarjeta(cards_frame, "Préstamos Activos", str(metricas['prestamos_activos']), PRIMARY)
+        self.crear_tarjeta(cards_frame, "Capital Disponible", f"${cap_disponible:,.2f}", SUCCESS if cap_disponible > 0 else DANGER)
+        
+        if deuda > 0:
+            ttk.Label(self.content_frame, text=f"⚠️ Deuda del Dueño: ${deuda:,.2f}", font=("Inter", 14, "bold"), bootstyle=DANGER).pack(pady=10)
+
+    def crear_tarjeta(self, parent, titulo, valor, estilo):
+        card = ttk.Frame(parent, bootstyle=estilo, padding=15)
+        card.pack(side=LEFT, expand=YES, fill=BOTH, padx=10)
+        ttk.Label(card, text=titulo, font=("Inter", 10), bootstyle=f"inverse-{estilo}").pack()
+        ttk.Label(card, text=valor, font=("Inter", 16, "bold"), bootstyle=f"inverse-{estilo}").pack(pady=5)
+
+    # --- CLIENTES ---
+    def mostrar_clientes(self):
+        self.limpiar_contenido()
+        ttk.Label(self.content_frame, text="Gestión de Clientes", font=("Inter", 20, "bold")).pack(anchor=W, pady=10)
+        
+        top_frame = ttk.Frame(self.content_frame)
+        top_frame.pack(fill=X, pady=10)
+        
+        ttk.Button(top_frame, text="+ Nuevo Cliente", bootstyle=SUCCESS, command=self.modal_cliente).pack(side=LEFT)
+        self.search_var = tk.StringVar()
+        self.search_var.trace("w", lambda name, index, mode: self.actualizar_tabla_clientes())
+        ttk.Entry(top_frame, textvariable=self.search_var, width=40).pack(side=RIGHT)
+        ttk.Label(top_frame, text="Buscar:").pack(side=RIGHT, padx=5)
+        
+        # Tabla Clientes
+        columns = ("ID", "Nombre", "Teléfono", "Lugar", "Día Cobro", "Frecuencia")
+        self.tree_clientes = ttk.Treeview(self.content_frame, columns=columns, show="headings", bootstyle=INFO)
+        for col in columns:
+            self.tree_clientes.heading(col, text=col)
+            self.tree_clientes.column(col, width=120)
+        self.tree_clientes.pack(fill=BOTH, expand=YES, pady=10)
+        
+        self.actualizar_tabla_clientes()
+        
+        btn_frame = ttk.Frame(self.content_frame)
+        btn_frame.pack(fill=X)
+        ttk.Button(btn_frame, text="Editar Seleccionado", bootstyle=WARNING, command=self.editar_cliente).pack(side=LEFT, padx=5)
+        ttk.Button(btn_frame, text="Eliminar Seleccionado", bootstyle=DANGER, command=self.eliminar_cliente).pack(side=LEFT, padx=5)
+
+    def actualizar_tabla_clientes(self):
+        for item in self.tree_clientes.get_children():
+            self.tree_clientes.delete(item)
+        clientes = backend.obtener_clientes(self.search_var.get())
+        for c in clientes:
+            self.tree_clientes.insert("", "end", values=(c[0], c[1], c[2], c[5], c[6], c[7]))
+
+    def modal_cliente(self, cliente=None):
+        modal = ttk.Toplevel(self)
+        modal.title("Nuevo Cliente" if not cliente else "Editar Cliente")
+        modal.geometry("400x500")
+        modal.grab_set()
+        
+        campos = ["Nombre Completo", "Teléfono", "Correo", "Dirección", "Lugar de Residencia"]
+        entries = {}
+        
+        for campo in campos:
+            ttk.Label(modal, text=campo).pack(pady=2, padx=20, anchor=W)
+            ent = ttk.Entry(modal, width=40)
+            ent.pack(pady=2, padx=20)
+            entries[campo] = ent
+            
+        ttk.Label(modal, text="Día de Cobro").pack(pady=2, padx=20, anchor=W)
+        dia_cb = ttk.Combobox(modal, values=["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"], state="readonly")
+        dia_cb.pack(pady=2, padx=20, fill=X)
+        dia_cb.set("Lunes")
+        
+        ttk.Label(modal, text="Frecuencia").pack(pady=2, padx=20, anchor=W)
+        frec_cb = ttk.Combobox(modal, values=["Semanal", "Mensual"], state="readonly")
+        frec_cb.pack(pady=2, padx=20, fill=X)
+        frec_cb.set("Semanal")
+        
+        if cliente:
+            entries["Nombre Completo"].insert(0, cliente[1])
+            entries["Teléfono"].insert(0, cliente[2] if cliente[2] else "")
+            entries["Correo"].insert(0, cliente[3] if cliente[3] else "")
+            entries["Dirección"].insert(0, cliente[4] if cliente[4] else "")
+            entries["Lugar de Residencia"].insert(0, cliente[5] if cliente[5] else "")
+            dia_cb.set(cliente[6])
+            frec_cb.set(cliente[7])
+            
+        def guardar():
+            nombre = entries["Nombre Completo"].get()
+            if not nombre:
+                Messagebox.show_error("El nombre es obligatorio", "Error", parent=modal)
+                return
+            if cliente:
+                backend.actualizar_cliente(cliente[0], nombre, entries["Teléfono"].get(), entries["Correo"].get(), entries["Dirección"].get(), entries["Lugar de Residencia"].get(), dia_cb.get(), frec_cb.get())
+            else:
+                backend.registrar_cliente(nombre, entries["Teléfono"].get(), entries["Correo"].get(), entries["Dirección"].get(), entries["Lugar de Residencia"].get(), dia_cb.get(), frec_cb.get())
+            self.actualizar_tabla_clientes()
+            modal.destroy()
+            
+        ttk.Button(modal, text="Guardar", bootstyle=SUCCESS, command=guardar).pack(pady=20)
+
+    def editar_cliente(self):
+        sel = self.tree_clientes.selection()
+        if not sel: return
+        id_cliente = self.tree_clientes.item(sel[0], "values")[0]
+        cliente = backend.obtener_cliente_por_id(id_cliente)
+        self.modal_cliente(cliente)
+
+    def eliminar_cliente(self):
+        sel = self.tree_clientes.selection()
+        if not sel: return
+        if Messagebox.show_question("¿Eliminar cliente seleccionado?", "Confirmar") == "Yes":
+            id_cliente = self.tree_clientes.item(sel[0], "values")[0]
+            backend.eliminar_cliente(id_cliente)
+            self.actualizar_tabla_clientes()
+
+    # --- PRÉSTAMOS ---
+    def mostrar_prestamos(self):
+        self.limpiar_contenido()
+        ttk.Label(self.content_frame, text="Gestión de Préstamos Activos", font=("Inter", 20, "bold")).pack(anchor=W, pady=10)
+        
+        ttk.Button(self.content_frame, text="+ Nuevo Préstamo", bootstyle=PRIMARY, command=self.modal_nuevo_prestamo).pack(anchor=W, pady=5)
+        
+        columns = ("ID", "Cliente", "Monto", "Total a Pagar", "Cuota", "Fecha Inicio", "Estado")
+        self.tree_prestamos = ttk.Treeview(self.content_frame, columns=columns, show="headings", bootstyle=WARNING)
+        for col in columns:
+            self.tree_prestamos.heading(col, text=col)
+        self.tree_prestamos.pack(fill=BOTH, expand=YES, pady=10)
+        
+        self.actualizar_tabla_prestamos()
+
+    def actualizar_tabla_prestamos(self):
+        for item in self.tree_prestamos.get_children():
+            self.tree_prestamos.delete(item)
+        prestamos = backend.obtener_todos_prestamos_activos()
+        for p in prestamos:
+            self.tree_prestamos.insert("", "end", values=p)
+
+    def modal_nuevo_prestamo(self):
+        modal = ttk.Toplevel(self)
+        modal.title("Nuevo Préstamo")
+        modal.geometry("450x550")
+        modal.grab_set()
+        
+        ttk.Label(modal, text="Seleccionar Cliente:").pack(pady=5, padx=20, anchor=W)
+        clientes = backend.obtener_clientes()
+        lista_clientes = [f"{c[0]} - {c[1]}" for c in clientes]
+        cb_clientes = ttk.Combobox(modal, values=lista_clientes, state="readonly")
+        cb_clientes.pack(pady=5, padx=20, fill=X)
+        
+        ttk.Label(modal, text="Monto ($):").pack(pady=5, padx=20, anchor=W)
+        ent_monto = ttk.Entry(modal)
+        ent_monto.pack(pady=5, padx=20, fill=X)
+        
+        ttk.Label(modal, text="Tasa de Interés (% total):").pack(pady=5, padx=20, anchor=W)
+        ent_tasa = ttk.Entry(modal)
+        ent_tasa.insert(0, "20")
+        ent_tasa.pack(pady=5, padx=20, fill=X)
+        
+        ttk.Label(modal, text="Plazo (periodos):").pack(pady=5, padx=20, anchor=W)
+        ent_plazo = ttk.Entry(modal)
+        ent_plazo.pack(pady=5, padx=20, fill=X)
+        
+        lbl_resumen = ttk.Label(modal, text="Calculando...", font=("Inter", 10, "bold"), bootstyle=INFO)
+        lbl_resumen.pack(pady=15)
+        
+        def actualizar_resumen(*args):
+            try:
+                monto = float(ent_monto.get())
+                tasa = float(ent_tasa.get())
+                plazo = int(ent_plazo.get())
+                interes = monto * (tasa/100)
+                total = monto + interes
+                cuota = total / plazo
+                lbl_resumen.config(text=f"Total a pagar: ${total:,.2f} | Cuota: ${cuota:,.2f}")
+            except ValueError:
+                lbl_resumen.config(text="Esperando valores válidos...")
+                
+        ent_monto.bind("<KeyRelease>", actualizar_resumen)
+        ent_tasa.bind("<KeyRelease>", actualizar_resumen)
+        ent_plazo.bind("<KeyRelease>", actualizar_resumen)
+        
+        def guardar():
+            try:
+                cliente_id = int(cb_clientes.get().split(" - ")[0])
+                monto = float(ent_monto.get())
+                tasa = float(ent_tasa.get())
+                plazo = int(ent_plazo.get())
+                
+                # Validar capital
+                cap = backend.obtener_capital()
+                if cap and cap[2] < monto:
+                    if Messagebox.show_question("El capital disponible no es suficiente. Se generará DEUDA DEL DUEÑO. ¿Continuar?", "Alerta de Capital", parent=modal) != "Yes":
+                        return
+                        
+                backend.registrar_prestamo(cliente_id, monto, tasa, plazo)
+                self.actualizar_tabla_prestamos()
+                Messagebox.show_info("Préstamo registrado correctamente", "Éxito", parent=self)
+                modal.destroy()
+            except Exception as e:
+                Messagebox.show_error(f"Error al registrar: {e}", "Error", parent=modal)
+                
+        ttk.Button(modal, text="Autorizar Préstamo", bootstyle=SUCCESS, command=guardar).pack(pady=20)
+
+    # --- COBROS ---
+    def mostrar_cobros(self):
+        self.limpiar_contenido()
+        ttk.Label(self.content_frame, text="Cobros del Día", font=("Inter", 20, "bold")).pack(anchor=W, pady=10)
+        
+        columns = ("Cliente", "Teléfono", "Lugar", "P. ID", "Pago ID", "Monto Esperado", "Estatus")
+        self.tree_cobros = ttk.Treeview(self.content_frame, columns=columns, show="headings", bootstyle=SUCCESS)
+        for col in columns:
+            self.tree_cobros.heading(col, text=col)
+            self.tree_cobros.column(col, width=100)
+        self.tree_cobros.pack(fill=BOTH, expand=YES, pady=10)
+        
+        self.actualizar_tabla_cobros()
+        
+        btn_frame = ttk.Frame(self.content_frame)
+        btn_frame.pack(fill=X)
+        ttk.Button(btn_frame, text="✅ Pagó Completo", bootstyle=SUCCESS, command=lambda: self.registrar_pago_accion("pagado")).pack(side=LEFT, padx=5)
+        ttk.Button(btn_frame, text="⚠️ Pago Parcial", bootstyle=WARNING, command=lambda: self.registrar_pago_accion("parcial")).pack(side=LEFT, padx=5)
+        ttk.Button(btn_frame, text="❌ No Pagó", bootstyle=DANGER, command=lambda: self.registrar_pago_accion("falta")).pack(side=LEFT, padx=5)
+
+    def actualizar_tabla_cobros(self):
+        for item in self.tree_cobros.get_children():
+            self.tree_cobros.delete(item)
+        cobros = backend.obtener_cobros_del_dia()
+        for c in cobros:
+            self.tree_cobros.insert("", "end", values=c)
+
+    def registrar_pago_accion(self, tipo):
+        sel = self.tree_cobros.selection()
+        if not sel: return
+        
+        pago_id = self.tree_cobros.item(sel[0], "values")[4]
+        monto_esperado = float(self.tree_cobros.item(sel[0], "values")[5])
+        
+        if tipo == "pagado":
+            backend.registrar_pago(pago_id, monto_esperado, "pagado")
+        elif tipo == "falta":
+            backend.registrar_pago(pago_id, 0, "falta", adeudo=monto_esperado)
+        elif tipo == "parcial":
+            # Modal para pedir monto
+            monto_str = ttk.dialogs.dialogs.Querybox.get_string(prompt="Ingrese monto recibido:", title="Pago Parcial", parent=self)
+            try:
+                monto = float(monto_str)
+                adeudo = monto_esperado - monto
+                backend.registrar_pago(pago_id, monto, "parcial", adeudo=adeudo)
+            except:
+                Messagebox.show_error("Monto inválido", "Error")
+                return
+                
+        self.actualizar_tabla_cobros()
+
+    # --- CAPITAL ---
+    def mostrar_capital(self):
+        self.limpiar_contenido()
+        ttk.Label(self.content_frame, text="Gestión de Capital", font=("Inter", 20, "bold")).pack(anchor=W, pady=10)
+        
+        cap = backend.obtener_capital()
+        total = cap[1] if cap else 0
+        disponible = cap[2] if cap else 0
+        deuda = cap[3] if cap else 0
+        
+        cards_frame = ttk.Frame(self.content_frame)
+        cards_frame.pack(fill=X, pady=20)
+        
+        self.crear_tarjeta(cards_frame, "Capital Total", f"${total:,.2f}", PRIMARY)
+        self.crear_tarjeta(cards_frame, "Capital Disponible", f"${disponible:,.2f}", SUCCESS if disponible > 0 else DANGER)
+        self.crear_tarjeta(cards_frame, "Deuda del Dueño", f"${deuda:,.2f}", DANGER if deuda > 0 else SECONDARY)
+        
+        ttk.Button(self.content_frame, text="Ajustar Capital Manualmente", bootstyle=INFO, command=self.modal_ajuste_capital).pack(pady=10, anchor=W)
+        
+        ttk.Label(self.content_frame, text="Historial de Movimientos de Capital", font=("Inter", 14, "bold")).pack(anchor=W, pady=10)
+        
+        # Tabla movimientos
+        columns = ("ID", "Tipo", "Monto", "Descripción", "Fecha")
+        self.tree_movs = ttk.Treeview(self.content_frame, columns=columns, show="headings", bootstyle=SECONDARY)
+        for col in columns: self.tree_movs.heading(col, text=col)
+        self.tree_movs.pack(fill=BOTH, expand=YES)
+        
+        conexion = backend.conectar()
+        cursor = conexion.cursor()
+        cursor.execute("SELECT * FROM movimientos_capital ORDER BY id DESC LIMIT 50")
+        movs = cursor.fetchall()
+        conexion.close()
+        
+        for m in movs: self.tree_movs.insert("", "end", values=m)
+
+    def modal_ajuste_capital(self):
+        modal = ttk.Toplevel(self)
+        modal.title("Ajuste de Capital Total")
+        modal.geometry("300x200")
+        modal.grab_set()
+        
+        ttk.Label(modal, text="Nuevo Capital Físico Total:").pack(pady=10)
+        ent = ttk.Entry(modal)
+        ent.pack(pady=10)
+        
+        def guardar():
+            try:
+                nuevo_tot = float(ent.get())
+                backend.ajustar_capital_manual(nuevo_tot)
+                self.mostrar_capital()
+                modal.destroy()
+            except ValueError:
+                pass
+        
+        ttk.Button(modal, text="Guardar", bootstyle=SUCCESS, command=guardar).pack(pady=10)
+
+    # --- GRÁFICAS ---
+    def mostrar_graficas(self):
+        self.limpiar_contenido()
+        ttk.Label(self.content_frame, text="Análisis y Gráficas", font=("Inter", 20, "bold")).pack(anchor=W, pady=10)
+        
+        datos = backend.obtener_datos_graficas()
+        
+        fig, axs = plt.subplots(1, 2, figsize=(10, 4))
+        
+        # Gráfica Pastel: Capital por zona
+        zonas = [d[0] for d in datos["capital_por_zona"]] if datos["capital_por_zona"] else ["Sin datos"]
+        valores_zonas = [d[1] for d in datos["capital_por_zona"]] if datos["capital_por_zona"] else [1]
+        
+        axs[0].pie(valores_zonas, labels=zonas, autopct='%1.1f%%', startangle=90, colors=['#3498db', '#e74c3c', '#2ecc71', '#f1c40f'])
+        axs[0].set_title('Capital Activo por Zona')
+        
+        # Gráfica Barras: Entradas vs Salidas
+        tipos = [d[0] for d in datos["movimientos"]] if datos["movimientos"] else ["Entrada", "Salida"]
+        valores_movs = [d[1] for d in datos["movimientos"]] if datos["movimientos"] else [0, 0]
+        
+        axs[1].bar(tipos, valores_movs, color=['#2ecc71', '#e74c3c', '#f39c12'])
+        axs[1].set_title('Movimientos de Capital Históricos')
+        
+        canvas = FigureCanvasTkAgg(fig, master=self.content_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=BOTH, expand=YES, pady=10)
+
+if __name__ == "__main__":
+    app = PrestamosApp()
+    app.mainloop()
