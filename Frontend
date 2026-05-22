@@ -1,4 +1,3 @@
-
 import tkinter as tk
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
@@ -87,6 +86,7 @@ class PrestamosApp(ttk.Window):
             ("Clientes", "info", self.mostrar_clientes),
             ("Préstamos", "warning", self.mostrar_prestamos),
             ("Cobros", "success", self.mostrar_cobros),
+            ("Ahorros", "info", self.mostrar_ahorros),
             ("Capital", "danger", self.mostrar_capital),
             ("Gráficas", "light", self.mostrar_graficas),
             ("Salir", "secondary", self.mostrar_login)
@@ -113,18 +113,20 @@ class PrestamosApp(ttk.Window):
         metricas = backend.obtener_metricas_dashboard()
         cap = backend.obtener_capital()
         cap_disponible = cap[2] if cap else 0
-        deuda = cap[3] if cap else 0
+        deuda_dueno = cap[3] if cap else 0
+        deuda_ahorros = cap[5] if cap and len(cap) > 5 else 0
+        caja_real = cap_disponible - deuda_ahorros if cap_disponible >= deuda_ahorros else 0
         
         cards_frame = ttk.Frame(self.content_frame)
         cards_frame.pack(fill=X, pady=20)
         
         self.crear_tarjeta(cards_frame, "Cobros Esperados Hoy", f"${metricas['esperado_hoy']:,.2f}", SUCCESS)
-        self.crear_tarjeta(cards_frame, "Ganancias Estimadas", f"${metricas['ganancias_estimadas']:,.2f}", INFO)
         self.crear_tarjeta(cards_frame, "Préstamos Activos", str(metricas['prestamos_activos']), PRIMARY)
-        self.crear_tarjeta(cards_frame, "Capital Disponible", f"${cap_disponible:,.2f}", SUCCESS if cap_disponible > 0 else DANGER)
+        self.crear_tarjeta(cards_frame, "Caja Real Mía", f"${caja_real:,.2f}", SUCCESS if caja_real > 0 else DANGER)
+        self.crear_tarjeta(cards_frame, "Deuda Ahorradores", f"${deuda_ahorros:,.2f}", INFO)
         
-        if deuda > 0:
-            ttk.Label(self.content_frame, text=f"⚠️ Deuda del Dueño: ${deuda:,.2f}", font=("Inter", 14, "bold"), bootstyle=DANGER).pack(pady=10)
+        if deuda_dueno > 0:
+            ttk.Label(self.content_frame, text=f"⚠️ Deuda del Dueño: ${deuda_dueno:,.2f}", font=("Inter", 14, "bold"), bootstyle=DANGER).pack(pady=10)
 
     def crear_tarjeta(self, parent, titulo, valor, estilo):
         card = ttk.Frame(parent, bootstyle=estilo, padding=15)
@@ -236,7 +238,10 @@ class PrestamosApp(ttk.Window):
         self.limpiar_contenido()
         ttk.Label(self.content_frame, text="Gestión de Préstamos Activos", font=("Inter", 20, "bold")).pack(anchor=W, pady=10)
         
-        ttk.Button(self.content_frame, text="+ Nuevo Préstamo", bootstyle=PRIMARY, command=self.modal_nuevo_prestamo).pack(anchor=W, pady=5)
+        btn_frame = ttk.Frame(self.content_frame)
+        btn_frame.pack(fill=X, pady=5)
+        ttk.Button(btn_frame, text="+ Nuevo Préstamo", bootstyle=PRIMARY, command=self.modal_nuevo_prestamo).pack(side=LEFT, padx=5)
+        ttk.Button(btn_frame, text="Ver / Registrar Pagos", bootstyle=SUCCESS, command=self.modal_pagos_prestamo).pack(side=LEFT, padx=5)
         
         columns = ("ID", "Cliente", "Monto", "Total a Pagar", "Cuota", "Fecha Inicio", "Estado")
         self.tree_prestamos = ttk.Treeview(self.content_frame, columns=columns, show="headings", bootstyle=WARNING)
@@ -319,10 +324,51 @@ class PrestamosApp(ttk.Window):
                 
         ttk.Button(modal, text="Autorizar Préstamo", bootstyle=SUCCESS, command=guardar).pack(pady=20)
 
+    def modal_pagos_prestamo(self):
+        sel = self.tree_prestamos.selection()
+        if not sel:
+            Messagebox.show_warning("Seleccione un préstamo primero", "Aviso")
+            return
+        
+        prestamo_id = self.tree_prestamos.item(sel[0], "values")[0]
+        
+        modal = ttk.Toplevel(self)
+        modal.title(f"Pagos del Préstamo #{prestamo_id}")
+        modal.geometry("600x400")
+        modal.grab_set()
+        
+        columns = ("ID Pago", "Periodo", "Esperado", "Pagado", "Estatus")
+        tree = ttk.Treeview(modal, columns=columns, show="headings", bootstyle=INFO)
+        for col in columns: tree.heading(col, text=col); tree.column(col, width=100)
+        tree.pack(fill=BOTH, expand=YES, pady=10, padx=10)
+        
+        def refrescar():
+            for item in tree.get_children(): tree.delete(item)
+            pagos = backend.obtener_pagos_prestamo(prestamo_id)
+            for p in pagos:
+                tree.insert("", "end", values=(p[0], p[2], p[5], p[6], p[7]))
+        
+        refrescar()
+        
+        btn_frame = ttk.Frame(modal)
+        btn_frame.pack(fill=X, pady=10, padx=10)
+        
+        def pagar_seleccionado():
+            sel_pago = tree.selection()
+            if not sel_pago: return
+            pago_id = tree.item(sel_pago[0], "values")[0]
+            monto_esperado = float(tree.item(sel_pago[0], "values")[2])
+            backend.registrar_pago(pago_id, monto_esperado, "pagado")
+            refrescar()
+            self.actualizar_tabla_prestamos()
+            
+        ttk.Button(btn_frame, text="✅ Registrar Pago Completo", bootstyle=SUCCESS, command=pagar_seleccionado).pack(side=LEFT, padx=5)
+
     # --- COBROS ---
     def mostrar_cobros(self):
         self.limpiar_contenido()
         ttk.Label(self.content_frame, text="Cobros del Día", font=("Inter", 20, "bold")).pack(anchor=W, pady=10)
+        ttk.Label(self.content_frame, text="Seleccione a una persona en la tabla y oprima un botón debajo para registrar el cobro.", font=("Inter", 10)).pack(anchor=W)
         
         columns = ("Cliente", "Teléfono", "Lugar", "P. ID", "Pago ID", "Monto Esperado", "Estatus")
         self.tree_cobros = ttk.Treeview(self.content_frame, columns=columns, show="headings", bootstyle=SUCCESS)
@@ -358,16 +404,28 @@ class PrestamosApp(ttk.Window):
         elif tipo == "falta":
             backend.registrar_pago(pago_id, 0, "falta", adeudo=monto_esperado)
         elif tipo == "parcial":
-            # Modal para pedir monto
-            monto_str = ttk.dialogs.dialogs.Querybox.get_string(prompt="Ingrese monto recibido:", title="Pago Parcial", parent=self)
-            try:
-                monto = float(monto_str)
-                adeudo = monto_esperado - monto
-                backend.registrar_pago(pago_id, monto, "parcial", adeudo=adeudo)
-            except:
-                Messagebox.show_error("Monto inválido", "Error")
-                return
-                
+            modal_parcial = ttk.Toplevel(self)
+            modal_parcial.title("Pago Parcial")
+            modal_parcial.geometry("300x150")
+            modal_parcial.grab_set()
+            
+            ttk.Label(modal_parcial, text="Ingrese monto recibido:").pack(pady=10)
+            ent_monto = ttk.Entry(modal_parcial)
+            ent_monto.pack(pady=5)
+            
+            def procesar_parcial():
+                try:
+                    monto = float(ent_monto.get())
+                    adeudo = monto_esperado - monto
+                    backend.registrar_pago(pago_id, monto, "parcial", adeudo=adeudo)
+                    self.actualizar_tabla_cobros()
+                    modal_parcial.destroy()
+                except ValueError:
+                    Messagebox.show_error("Monto inválido", "Error", parent=modal_parcial)
+                    
+            ttk.Button(modal_parcial, text="Guardar", bootstyle=SUCCESS, command=procesar_parcial).pack(pady=10)
+            return
+
         self.actualizar_tabla_cobros()
 
     # --- CAPITAL ---
@@ -379,13 +437,16 @@ class PrestamosApp(ttk.Window):
         total = cap[1] if cap else 0
         disponible = cap[2] if cap else 0
         deuda = cap[3] if cap else 0
+        deuda_ahorros = cap[5] if cap and len(cap) > 5 else 0
+        caja_real = disponible - deuda_ahorros if disponible >= deuda_ahorros else 0
         
         cards_frame = ttk.Frame(self.content_frame)
         cards_frame.pack(fill=X, pady=20)
         
-        self.crear_tarjeta(cards_frame, "Capital Total", f"${total:,.2f}", PRIMARY)
-        self.crear_tarjeta(cards_frame, "Capital Disponible", f"${disponible:,.2f}", SUCCESS if disponible > 0 else DANGER)
-        self.crear_tarjeta(cards_frame, "Deuda del Dueño", f"${deuda:,.2f}", DANGER if deuda > 0 else SECONDARY)
+        self.crear_tarjeta(cards_frame, "Capital Físico / Liquidez", f"${disponible:,.2f}", SUCCESS if disponible > 0 else DANGER)
+        self.crear_tarjeta(cards_frame, "Caja Real Mía", f"${caja_real:,.2f}", PRIMARY)
+        self.crear_tarjeta(cards_frame, "Deuda Ahorradores", f"${deuda_ahorros:,.2f}", INFO)
+        self.crear_tarjeta(cards_frame, "Deuda Dueño", f"${deuda:,.2f}", DANGER if deuda > 0 else SECONDARY)
         
         ttk.Button(self.content_frame, text="Ajustar Capital Manualmente", bootstyle=INFO, command=self.modal_ajuste_capital).pack(pady=10, anchor=W)
         
@@ -426,33 +487,147 @@ class PrestamosApp(ttk.Window):
         
         ttk.Button(modal, text="Guardar", bootstyle=SUCCESS, command=guardar).pack(pady=10)
 
+    # --- AHORROS ---
+    def mostrar_ahorros(self):
+        self.limpiar_contenido()
+        ttk.Label(self.content_frame, text="Gestión de Ahorros a Plazo Fijo", font=("Inter", 20, "bold")).pack(anchor=W, pady=10)
+        
+        btn_frame = ttk.Frame(self.content_frame)
+        btn_frame.pack(fill=X, pady=5)
+        ttk.Button(btn_frame, text="+ Nueva Cuenta de Ahorro", bootstyle=PRIMARY, command=self.modal_nuevo_ahorro).pack(side=LEFT, padx=5)
+        ttk.Button(btn_frame, text="Depositar a Cuenta", bootstyle=SUCCESS, command=self.modal_deposito_ahorro).pack(side=LEFT, padx=5)
+        
+        columns = ("ID", "Cliente", "Tasa Interés (%)", "Saldo Actual", "Apertura", "Liberación", "Estado")
+        self.tree_ahorros = ttk.Treeview(self.content_frame, columns=columns, show="headings", bootstyle=INFO)
+        for col in columns: self.tree_ahorros.heading(col, text=col)
+        self.tree_ahorros.pack(fill=BOTH, expand=YES, pady=10)
+        
+        self.actualizar_tabla_ahorros()
+
+    def actualizar_tabla_ahorros(self):
+        for item in self.tree_ahorros.get_children(): self.tree_ahorros.delete(item)
+        ahorros = backend.obtener_ahorros_activos()
+        for a in ahorros: self.tree_ahorros.insert("", "end", values=a)
+
+    def modal_nuevo_ahorro(self):
+        modal = ttk.Toplevel(self)
+        modal.title("Nueva Cuenta de Ahorro")
+        modal.geometry("400x300")
+        modal.grab_set()
+        
+        ttk.Label(modal, text="Seleccionar Cliente:").pack(pady=5, padx=20, anchor=W)
+        clientes = backend.obtener_clientes()
+        lista_clientes = [f"{c[0]} - {c[1]}" for c in clientes]
+        cb_clientes = ttk.Combobox(modal, values=lista_clientes, state="readonly")
+        cb_clientes.pack(pady=5, padx=20, fill=X)
+        
+        ttk.Label(modal, text="Tasa de Interés (% anual):").pack(pady=5, padx=20, anchor=W)
+        ent_tasa = ttk.Entry(modal)
+        ent_tasa.insert(0, "10")
+        ent_tasa.pack(pady=5, padx=20, fill=X)
+        
+        def guardar():
+            try:
+                cliente_id = int(cb_clientes.get().split(" - ")[0])
+                tasa = float(ent_tasa.get())
+                backend.crear_ahorro(cliente_id, tasa)
+                self.actualizar_tabla_ahorros()
+                Messagebox.show_info("Cuenta creada correctamente. El capital se bloqueará por 1 año.", "Éxito", parent=self)
+                modal.destroy()
+            except Exception as e:
+                Messagebox.show_error("Datos inválidos", "Error", parent=modal)
+                
+        ttk.Button(modal, text="Crear Cuenta", bootstyle=SUCCESS, command=guardar).pack(pady=20)
+
+    def modal_deposito_ahorro(self):
+        sel = self.tree_ahorros.selection()
+        if not sel:
+            Messagebox.show_warning("Seleccione una cuenta de ahorro de la tabla", "Aviso")
+            return
+            
+        ahorro_id = self.tree_ahorros.item(sel[0], "values")[0]
+        
+        modal_deposito = ttk.Toplevel(self)
+        modal_deposito.title("Depósito de Ahorro")
+        modal_deposito.geometry("300x180")
+        modal_deposito.grab_set()
+        
+        ttk.Label(modal_deposito, text="Monto a depositar ($):").pack(pady=10)
+        ent_monto = ttk.Entry(modal_deposito)
+        ent_monto.pack(pady=5)
+        
+        def procesar_deposito():
+            try:
+                monto = float(ent_monto.get())
+                if monto > 0:
+                    backend.depositar_ahorro(ahorro_id, monto)
+                    self.actualizar_tabla_ahorros()
+                    Messagebox.show_info(f"Se sumaron ${monto:,.2f} a tu capital disponible para prestarlos.", "Depósito Exitoso", parent=self)
+                    modal_deposito.destroy()
+                else:
+                    Messagebox.show_error("El monto debe ser mayor a 0", "Error", parent=modal_deposito)
+            except ValueError:
+                Messagebox.show_error("Monto inválido", "Error", parent=modal_deposito)
+                
+        ttk.Button(modal_deposito, text="Realizar Depósito", bootstyle=SUCCESS, command=procesar_deposito).pack(pady=15)
+
     # --- GRÁFICAS ---
     def mostrar_graficas(self):
         self.limpiar_contenido()
-        ttk.Label(self.content_frame, text="Análisis y Gráficas", font=("Inter", 20, "bold")).pack(anchor=W, pady=10)
+        ttk.Label(self.content_frame, text="Análisis y Gráficas de Crecimiento", font=("Inter", 20, "bold")).pack(anchor=W, pady=10)
         
         datos = backend.obtener_datos_graficas()
         
-        fig, axs = plt.subplots(1, 2, figsize=(10, 4))
+        fig, axs = plt.subplots(2, 2, figsize=(10, 7))
+        fig.tight_layout(pad=4.0)
         
-        # Gráfica Pastel: Capital por zona
+        # 1. Gráfica Pastel: Capital por zona
         zonas = [d[0] for d in datos["capital_por_zona"]] if datos["capital_por_zona"] else ["Sin datos"]
         valores_zonas = [d[1] for d in datos["capital_por_zona"]] if datos["capital_por_zona"] else [1]
         
-        axs[0].pie(valores_zonas, labels=zonas, autopct='%1.1f%%', startangle=90, colors=['#3498db', '#e74c3c', '#2ecc71', '#f1c40f'])
-        axs[0].set_title('Capital Activo por Zona')
+        axs[0, 0].pie(valores_zonas, labels=zonas, autopct='%1.1f%%', startangle=90, colors=['#3498db', '#e74c3c', '#2ecc71', '#f1c40f'])
+        axs[0, 0].set_title('Capital Prestado por Zona')
         
-        # Gráfica Barras: Entradas vs Salidas
+        # 2. Gráfica Pastel: Cartera Total
+        labels_cartera = [d[0] for d in datos["cartera_total"] if d[1] > 0]
+        valores_cartera = [d[1] for d in datos["cartera_total"] if d[1] > 0]
+        if not labels_cartera: labels_cartera, valores_cartera = ["Sin datos"], [1]
+        
+        axs[0, 1].pie(valores_cartera, labels=labels_cartera, autopct='%1.1f%%', startangle=90, colors=['#9b59b6', '#34495e', '#1abc9c'])
+        axs[0, 1].set_title('Distribución de Cartera Total')
+        
+        # 3. Gráfica Barras: Entradas vs Salidas
         tipos = [d[0] for d in datos["movimientos"]] if datos["movimientos"] else ["Entrada", "Salida"]
         valores_movs = [d[1] for d in datos["movimientos"]] if datos["movimientos"] else [0, 0]
         
-        axs[1].bar(tipos, valores_movs, color=['#2ecc71', '#e74c3c', '#f39c12'])
-        axs[1].set_title('Movimientos de Capital Históricos')
+        axs[1, 0].bar(tipos, valores_movs, color=['#2ecc71', '#e74c3c', '#f39c12'])
+        axs[1, 0].set_title('Volumen de Movimientos')
+        
+        # 4. Gráfica Líneas: Crecimiento de Activos
+        fechas = [d[0] for d in datos["crecimiento"]] if datos["crecimiento"] else ["Hoy"]
+        montos = [d[1] for d in datos["crecimiento"]] if datos["crecimiento"] else [0]
+        
+        acumulado = []
+        suma = 0
+        for m in montos:
+            suma += m
+            acumulado.append(suma)
+            
+        axs[1, 1].plot(fechas, acumulado, marker='o', color='#e67e22', linestyle='-', linewidth=2)
+        axs[1, 1].set_title('Crecimiento Histórico (Ingresos)')
+        axs[1, 1].tick_params(axis='x', rotation=45, labelsize=8)
         
         canvas = FigureCanvasTkAgg(fig, master=self.content_frame)
-        canvas.draw()
         canvas.get_tk_widget().pack(fill=BOTH, expand=YES, pady=10)
+        
+        # Dibujo inicial rápido
+        canvas.draw()
+        
+        # Truco definitivo: forzar un redibujado 200 milisegundos después 
+        # de que Windows termina de acomodar la ventana maximizada.
+        self.after(200, canvas.draw)
 
 if __name__ == "__main__":
     app = PrestamosApp()
     app.mainloop()
+
