@@ -100,6 +100,32 @@ def inicializar_bd():
         )
     ''')
 
+    # Tabla ahorros
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS ahorros (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cliente_id INTEGER,
+            tasa_interes REAL,
+            saldo REAL,
+            fecha_apertura TEXT,
+            fecha_desbloqueo TEXT,
+            estado TEXT,
+            FOREIGN KEY(cliente_id) REFERENCES clientes(id)
+        )
+    ''')
+
+    # Tabla movimientos_ahorro
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS movimientos_ahorro (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ahorro_id INTEGER,
+            tipo TEXT,
+            monto REAL,
+            fecha TEXT,
+            FOREIGN KEY(ahorro_id) REFERENCES ahorros(id)
+        )
+    ''')
+
     conexion.commit()
     conexion.close()
 
@@ -159,8 +185,15 @@ def obtener_capital():
     cursor = conexion.cursor()
     cursor.execute('SELECT * FROM capital WHERE id=1')
     cap = cursor.fetchone()
+    
+    cursor.execute('SELECT SUM(saldo) FROM ahorros WHERE estado="activo"')
+    res = cursor.fetchone()
+    deuda_ahorros = res[0] if res and res[0] else 0
     conexion.close()
-    return cap
+    
+    if cap:
+        return (cap[0], cap[1], cap[2], cap[3], cap[4], deuda_ahorros)
+    return None
 
 def registrar_movimiento_capital(tipo, monto, descripcion):
     conexion = conectar()
@@ -411,6 +444,54 @@ def concluir_prestamo_historial(prestamo_id, motivo):
     conexion.commit()
     conexion.close()
 
+# --- GESTION DE AHORROS ---
+def obtener_ahorros_activos():
+    conexion = conectar()
+    cursor = conexion.cursor()
+    cursor.execute('''
+        SELECT a.id, c.nombre, a.tasa_interes, a.saldo, a.fecha_apertura, a.fecha_desbloqueo, a.estado 
+        FROM ahorros a 
+        JOIN clientes c ON a.cliente_id = c.id 
+        WHERE a.estado="activo"
+    ''')
+    ahorros = cursor.fetchall()
+    conexion.close()
+    return ahorros
+
+def crear_ahorro(cliente_id, tasa_interes):
+    conexion = conectar()
+    cursor = conexion.cursor()
+    fecha_apertura = datetime.now()
+    fecha_desbloqueo = fecha_apertura + timedelta(days=365)
+    
+    cursor.execute('''
+        INSERT INTO ahorros (cliente_id, tasa_interes, saldo, fecha_apertura, fecha_desbloqueo, estado)
+        VALUES (?, ?, 0, ?, ?, 'activo')
+    ''', (cliente_id, tasa_interes, fecha_apertura.strftime("%Y-%m-%d"), fecha_desbloqueo.strftime("%Y-%m-%d")))
+    conexion.commit()
+    conexion.close()
+
+def depositar_ahorro(ahorro_id, monto):
+    conexion = conectar()
+    cursor = conexion.cursor()
+    fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # Insertar movimiento
+    cursor.execute('INSERT INTO movimientos_ahorro (ahorro_id, tipo, monto, fecha) VALUES (?, ?, ?, ?)', (ahorro_id, 'deposito', monto, fecha))
+    
+    # Actualizar saldo ahorro
+    cursor.execute('UPDATE ahorros SET saldo = saldo + ? WHERE id = ?', (monto, ahorro_id))
+    
+    # Actualizar capital (sumar al disponible y total)
+    cursor.execute('SELECT capital_total, capital_disponible FROM capital WHERE id=1')
+    cap = cursor.fetchone()
+    total = cap[0] + monto
+    disponible = cap[1] + monto
+    cursor.execute('UPDATE capital SET capital_total=?, capital_disponible=?, fecha_actualizacion=? WHERE id=1', (total, disponible, fecha))
+    
+    conexion.commit()
+    conexion.close()
+
 # --- COBROS DEL DIA ---
 def obtener_cobros_del_dia(fecha=None):
     if fecha is None:
@@ -471,7 +552,7 @@ def obtener_datos_graficas():
     conexion = conectar()
     cursor = conexion.cursor()
     
-    # Capital por zona
+    # 1. Capital por zona
     cursor.execute('''
         SELECT c.lugar_residencia, SUM(p.monto) 
         FROM prestamos p 
@@ -481,16 +562,44 @@ def obtener_datos_graficas():
     ''')
     capital_por_zona = cursor.fetchall()
     
-    # Movimientos de capital (entradas vs salidas)
+    # 2. Movimientos de capital (entradas vs salidas)
     cursor.execute('''
         SELECT tipo, SUM(monto) FROM movimientos_capital GROUP BY tipo
     ''')
     movimientos = cursor.fetchall()
     
+    # 3. Cartera Total
+    cursor.execute("SELECT SUM(monto) FROM prestamos WHERE estado='activo'")
+    res_calle = cursor.fetchone()
+    en_calle = res_calle[0] if res_calle and res_calle[0] else 0
+    
+    cursor.execute('SELECT capital_disponible FROM capital WHERE id=1')
+    cap_disp = cursor.fetchone()
+    disponible = cap_disp[0] if cap_disp else 0
+    
+    cursor.execute('SELECT SUM(saldo) FROM ahorros WHERE estado="activo"')
+    ahorros = cursor.fetchone()
+    deuda_ahorros = ahorros[0] if ahorros and ahorros[0] else 0
+    
+    caja_real = disponible - deuda_ahorros if disponible >= deuda_ahorros else 0
+    cartera_total = [("En Calle (Prestado)", en_calle), ("Caja Real Mía", caja_real), ("Dinero Ahorradores", deuda_ahorros)]
+    
+    # 4. Crecimiento (Pagos recibidos a lo largo del tiempo)
+    cursor.execute('''
+        SELECT fecha_pago, SUM(monto_pagado) 
+        FROM pagos 
+        WHERE estatus IN ('pagado', 'parcial') 
+        GROUP BY fecha_pago 
+        ORDER BY fecha_pago
+    ''')
+    crecimiento = cursor.fetchall()
+    
     conexion.close()
     return {
         "capital_por_zona": capital_por_zona,
-        "movimientos": movimientos
+        "movimientos": movimientos,
+        "cartera_total": cartera_total,
+        "crecimiento": crecimiento
     }
 
 if __name__ == "__main__":
